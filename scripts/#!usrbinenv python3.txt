@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""
+================================================================
+  YOUTUBE KIDS AUTO-PILOT — ALL-IN-ONE FILE
+  Copy this entire file, then run: python youtube_autopilot.py
+================================================================
+"""
+
+# ============================================================
+# STEP 1: INSTALL THESE FIRST (run in terminal):
+# pip install anthropic google-api-python-client google-auth-oauthlib gTTS Pillow requests schedule python-dotenv mutagen
+# Also install FFmpeg: https://ffmpeg.org/download.html
+# ============================================================
+
+# ============================================================
+# STEP 2: FILL IN YOUR API KEYS BELOW
+# ============================================================
+
+CONFIG = {
+    "ANTHROPIC_API_KEY":      "sk-ant-YOUR_KEY_HERE",       # console.anthropic.com (free)
+    "YOUTUBE_CLIENT_ID":      "YOUR_ID.apps.googleusercontent.com",
+    "YOUTUBE_CLIENT_SECRET":  "YOUR_SECRET",
+    "YOUTUBE_REFRESH_TOKEN":  "YOUR_REFRESH_TOKEN",
+    "GOOGLE_SHEETS_ID":       "YOUR_SHEET_ID",
+    "PIXABAY_API_KEY":        "YOUR_PIXABAY_KEY",           # pixabay.com/api/docs (free)
+    "ELEVENLABS_API_KEY":     "",                            # optional, elevenlabs.io (free tier)
+    "VIDEO_PRIVACY":          "public",
+    "MADE_FOR_KIDS":          True,
+}
+
+# ============================================================
+# IMPORTS
+# ============================================================
+import os, sys, json, random, shutil, subprocess, time, traceback, schedule
+from datetime import datetime, timedelta
+from pathlib import Path
+
+# ============================================================
+# SEO & UPLOAD SCHEDULE
+# ============================================================
+
+UPLOAD_SCHEDULE = {
+    "monday": "18:00", "tuesday": "18:00", "wednesday": "17:30",
+    "thursday": "18:00", "friday": "16:00", "saturday": "09:00", "sunday": "10:00",
+}
+
+CONTENT_CALENDAR = {
+    "monday":    ("Adventure Story",    ["adventure", "brave", "hero"]),
+    "tuesday":   ("Animal Story",       ["animal", "forest", "wildlife"]),
+    "wednesday": ("Moral Story",        ["kindness", "sharing", "honesty"]),
+    "thursday":  ("Fantasy Story",      ["magic", "wizard", "dragon"]),
+    "friday":    ("Comedy Story",       ["funny", "silly", "laughter"]),
+    "saturday":  ("Princess/Hero",      ["princess", "castle", "kingdom"]),
+    "sunday":    ("Compilation",        ["collection", "favorites"]),
+}
+
+MASTER_TAGS = [
+    "bedtime stories for kids", "kids stories", "story time for kids",
+    "children's stories", "animated stories for kids", "bedtime stories",
+    "stories for toddlers", "kids bedtime stories", "moral stories for kids",
+    "english stories for children", "10 minute bedtime story",
+    "bedtime stories UK", "kids stories USA", "children stories Australia",
+    "good night stories", "short stories for kids", "kids animation",
+    "bedtime story 2025", "stories for kids age 5", "story time animated",
+]
+
+STORY_TOPICS = [
+    "brave little dragon", "lost puppy finds home", "magic garden adventure",
+    "friendly robot helps kids", "underwater kingdom", "tiny fairy saves forest",
+    "lion who learned kindness", "rabbit who never gave up", "star that fell to earth",
+    "mouse who outsmarted lion", "penguin in the desert", "cloud that wanted to snow",
+    "elephant who forgot nothing", "owl who was afraid of dark", "snail who won the race",
+    "bear who loved honey too much", "fish who wanted to fly", "caterpillar becoming butterfly",
+    "little train that could", "duckling who was different",
+]
+
+DESCRIPTION_TEMPLATES = [
+"""🌙 {title} — A magical bedtime story for children!
+
+{story_preview}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+✨ PERFECT FOR:
+• Children ages 3-8
+• Bedtime routine
+• Learning values
+• Family story time
+
+💡 Today's Lesson: {moral}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+🔔 NEW STORY EVERY DAY! Subscribe & hit the bell!
+👍 Like if your child smiled!
+💬 Comment your child's favorite part!
+
+#KidsStories #BedtimeStories #ChildrenStories #StoryTime #KidsAnimation""",
+
+"""📖 {title} | Full Bedtime Story for Children
+
+{story_preview}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+🌟 WHY KIDS LOVE THIS:
+✅ Professional narration
+✅ Colorful illustrations
+✅ Relaxing background music
+✅ Educational moral values
+
+⭐ Moral of the Story: {moral}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+Subscribe for a new story every single day! 🌙
+
+#BedtimeStory #KidsStories #StoriesForKids #ChildrensBooks""",
+]
+
+FALLBACK_MUSIC_URLS = [
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
+]
+
+HISTORY_FILE = "logs/upload_history.json"
+LOGS_DIR = Path("logs")
+VIDEO_COUNT_FILE = Path("logs/video_count.txt")
+
+# ============================================================
+# LOGGING
+# ============================================================
+
+def log(msg, level="INFO"):
+    LOGS_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] [{level}] {msg}"
+    print(line)
+    with open(LOGS_DIR / "pipeline.log", "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+# ============================================================
+# ANTI-BAN SYSTEM
+# ============================================================
+
+def load_history():
+    LOGS_DIR.mkdir(exist_ok=True)
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE) as f:
+            return json.load(f)
+    return {"uploads": [], "titles": []}
+
+def save_history(history):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
+
+def check_upload_frequency():
+    history = load_history()
+    if not history["uploads"]:
+        return True, "OK — first upload"
+    last_dt = datetime.fromisoformat(history["uploads"][-1]["timestamp"])
+    hours_since = (datetime.now() - last_dt).total_seconds() / 3600
+    if hours_since < 23:
+        return False, f"Wait {23 - hours_since:.1f} more hours (anti-ban: max 1/day)"
+    return True, f"OK — {hours_since:.1f}h since last upload"
+
+def check_title_unique(title):
+    history = load_history()
+    if title.lower() in [t.lower() for t in history.get("titles", [])]:
+        return False, f"Duplicate title — regenerate"
+    return True, "Title is unique"
+
+def run_all_checks(title):
+    log("Running anti-ban checks...")
+    checks = [check_upload_frequency(), check_title_unique(title)]
+    all_ok = True
+    for passed, msg in checks:
+        log(f"  {'OK' if passed else 'FAIL'}: {msg}")
+        if not passed:
+            all_ok = False
+    return all_ok
+
+def record_upload(title, youtube_url, topic):
+    history = load_history()
+    history["uploads"].append({"timestamp": datetime.now().isoformat(), "title": title, "url": youtube_url, "topic": topic})
+    history["titles"].append(title)
+    cutoff = datetime.now() - timedelta(days=365)
+    history["uploads"] = [u for u in history["uploads"] if datetime.fromisoformat(u["timestamp"]) > cutoff]
+    save_history(history)
+    log(f"Recorded upload #{len(history['uploads'])}")
+
+def get_video_number():
+    if VIDEO_COUNT_FILE.exists():
+        return int(VIDEO_COUNT_FILE.read_text().strip())
+    return 1
+
+def increment_video_number():
+    n = get_video_number() + 1
+    LOGS_DIR.mkdir(exist_ok=True)
+    VIDEO_COUNT_FILE.write_text(str(n))
+
+# ============================================================
+# STEP 1: GENERATE STORY
+# ============================================================
+
+def generate_kids_story(topic=None):
+    import anthropic
+    client = anthropic.Anthropic(api_key=CONFIG["ANTHROPIC_API_KEY"])
+    if not topic:
+        topic = random.choice(STORY_TOPICS)
+    log(f"Generating story about: {topic}")
+    prompt = f"""Create a wonderful kids bedtime story (age 4-8) about: {topic}
+Write in simple English for American and British children. Short clear sentences.
+Return ONLY valid JSON:
+{{
+  "title": "Story Title",
+  "story": "Full story 350-420 words...",
+  "scenes": [
+    {{"id": 1, "desc": "colorful scene description for image"}},
+    {{"id": 2, "desc": "scene description"}},
+    {{"id": 3, "desc": "scene description"}},
+    {{"id": 4, "desc": "scene description"}},
+    {{"id": 5, "desc": "scene description"}}
+  ],
+  "moral": "The lesson in one sentence",
+  "tags": ["tag1","tag2","tag3","tag4","tag5"],
+  "topic": "{topic}"
+}}"""
+    msg = client.messages.create(
+        model="claude-haiku-4-5", max_tokens=1500,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    raw = msg.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    data = json.loads(raw.strip())
+    log(f"Story: '{data['title']}'")
+    return data
+
+# ============================================================
+# STEP 2: GENERATE IMAGES (FREE - Pollinations.ai)
+# ============================================================
+
+def generate_scene_image(scene_desc, scene_id, output_dir="scenes"):
+    import requests
+    Path(output_dir).mkdir(exist_ok=True)
+    prompt = f"children book illustration, {scene_desc}, colorful, cute, pixar style, bright, kid-friendly, high quality"
+    url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(prompt)}?width=1280&height=720&nologo=true&model=flux"
+    log(f"  Generating scene {scene_id}...")
+    for attempt in range(3):
+        try:
+            r = requests.get(url, timeout=90)
+            if r.status_code == 200 and len(r.content) > 1000:
+                path = f"{output_dir}/scene_{scene_id:02d}.jpg"
+                with open(path, "wb") as f:
+                    f.write(r.content)
+                log(f"  Scene {scene_id} saved")
+                time.sleep(2)
+                return path
+        except Exception as e:
+            log(f"  Attempt {attempt+1} failed: {e}")
+            time.sleep(5)
+    return None
+
+def generate_all_scenes(scenes, output_dir="scenes"):
+    log(f"Generating {len(scenes)} scene images (Pollinations.ai FREE)...")
+    paths = []
+    for scene in scenes:
+        p = generate_scene_image(scene["desc"], scene["id"], output_dir)
+        if p:
+            paths.append(p)
+    log(f"Generated {len(paths)}/{len(scenes)} scenes")
+    return paths
+
+# ============================================================
+# STEP 3: TEXT TO SPEECH
+# ============================================================
+
+def narrate_story(story_text, output_file="narration.mp3"):
+    import requests
+    log("Creating narration...")
+    api_key = CONFIG.get("ELEVENLABS_API_KEY", "").strip()
+    if api_key:
+        try:
+            voice_id = "21m00Tcm4TlvDq8ikWAM"
+            r = requests.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+                headers={"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": api_key},
+                json={"text": story_text, "model_id": "eleven_monolingual_v1",
+                      "voice_settings": {"stability": 0.75, "similarity_boost": 0.85}},
+                timeout=60
+            )
+            if r.status_code == 200:
+                with open(output_file, "wb") as f:
+                    f.write(r.content)
+                log("Narration via ElevenLabs")
+                return output_file
+        except Exception as e:
+            log(f"ElevenLabs failed: {e}, using gTTS")
+    from gtts import gTTS
+    gTTS(text=story_text, lang="en", tld="com", slow=False).save(output_file)
+    log("Narration via gTTS (free)")
+    return output_file
+
+# ============================================================
+# STEP 4: DOWNLOAD MUSIC
+# ============================================================
+
+def download_background_music(output_file="music.mp3"):
+    import requests
+    log("Getting background music...")
+    api_key = CONFIG.get("PIXABAY_API_KEY", "").strip()
+    if api_key:
+        try:
+            res = requests.get("https://pixabay.com/api/videos/music/",
+                params={"key": api_key, "q": "children happy", "category": "children", "per_page": 5},
+                timeout=30).json()
+            if res.get("hits"):
+                music_url = res["hits"][0].get("audio") or res["hits"][0].get("url")
+                if music_url:
+                    audio = requests.get(music_url, timeout=60)
+                    with open(output_file, "wb") as f:
+                        f.write(audio.content)
+                    log("Music from Pixabay")
+                    return output_file
+        except Exception as e:
+            log(f"Pixabay failed: {e}")
+    url = random.choice(FALLBACK_MUSIC_URLS)
+    try:
+        r = requests.get(url, timeout=60)
+        with open(output_file, "wb") as f:
+            f.write(r.content)
+        log("Fallback music downloaded")
+        return output_file
+    except Exception as e:
+        log(f"Music download failed: {e}")
+        return None
+
+# ============================================================
+# STEP 5: CREATE VIDEO (FFmpeg)
+# ============================================================
+
+def get_audio_duration(audio_path):
+    try:
+        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", audio_path]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        data = json.loads(result.stdout)
+        for stream in data.get("streams", []):
+            if stream.get("codec_type") == "audio":
+                return float(stream.get("duration", 60))
+    except:
+        pass
+    return 60.0
+
+def create_video(scene_paths, narration_path, music_path, output="final_video.mp4"):
+    log("Compiling video with FFmpeg...")
+    audio_dur = get_audio_duration(narration_path)
+    scene_dur = audio_dur / len(scene_paths)
+    log(f"  Narration: {audio_dur:.1f}s | Scenes: {len(scene_paths)} | Each: {scene_dur:.1f}s")
+    concat_file = "concat_list.txt"
+    with open(concat_file, "w") as f:
+        for path in scene_paths:
+            f.write(f"file '{os.path.abspath(path)}'\nduration {scene_dur:.2f}\n")
+        f.write(f"file '{os.path.abspath(scene_paths[-1])}'\n")
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0", "-i", concat_file,
+        "-i", os.path.abspath(narration_path),
+        "-i", os.path.abspath(music_path),
+        "-filter_complex", "[1:a]volume=1.0[narr];[2:a]volume=0.18,aloop=loop=-1:size=2e+09[music];[narr][music]amix=inputs=2:duration=first[aout]",
+        "-map", "0:v", "-map", "[aout]",
+        "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-r", "24", "-s", "1280x720",
+        "-acodec", "aac", "-b:a", "192k", "-shortest", output
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        log("Retrying without music mix...")
+        simple = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
+                  "-i", os.path.abspath(narration_path), "-map", "0:v", "-map", "1:a",
+                  "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-r", "24", "-s", "1280x720",
+                  "-acodec", "aac", "-shortest", output]
+        subprocess.run(simple, check=True)
+    if os.path.exists(concat_file):
+        os.remove(concat_file)
+    size_mb = os.path.getsize(output) / (1024*1024)
+    log(f"Video created: {output} ({size_mb:.1f} MB)")
+    return output
+
+# ============================================================
+# STEP 6: GENERATE THUMBNAIL
+# ============================================================
+
+def create_thumbnail(title, first_scene_path, output="thumbnail.jpg"):
+    from PIL import Image, ImageDraw, ImageFont
+    log("Creating thumbnail...")
+    bg = Image.open(first_scene_path).convert("RGBA").resize((1280, 720), Image.LANCZOS)
+    overlay = Image.new("RGBA", (1280, 720), (0,0,0,0))
+    draw_ov = ImageDraw.Draw(overlay)
+    for y in range(300, 720):
+        alpha = int(200 * ((y-300)/420)**1.5)
+        draw_ov.rectangle([0, y, 1280, y+1], fill=(10,10,30,alpha))
+    bg = Image.alpha_composite(bg, overlay).convert("RGB")
+    draw = ImageDraw.Draw(bg)
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    ]
+    font = None
+    for fp in font_paths:
+        if os.path.exists(fp):
+            try:
+                font = ImageFont.truetype(fp, 80)
+                break
+            except:
+                pass
+    if not font:
+        font = ImageFont.load_default()
+    words = title.upper().split()
+    lines = []
+    cur = ""
+    for w in words:
+        if len(cur) + len(w) + 1 <= 20:
+            cur += (" " + w) if cur else w
+        else:
+            if cur: lines.append(cur)
+            cur = w
+    if cur: lines.append(cur)
+    lines = lines[:3]
+    y = 420
+    for line in lines:
+        bbox = draw.textbbox((0,0), line, font=font)
+        x = (1280 - (bbox[2]-bbox[0])) // 2
+        for dx,dy in [(4,4),(6,6)]:
+            draw.text((x+dx, y+dy), line, font=font, fill=(0,0,0,180))
+        draw.text((x, y), line, font=font, fill=(255,220,0))
+        y += 90
+    bg.save(output, "JPEG", quality=95)
+    log(f"Thumbnail saved: {output}")
+    return output
+
+# ============================================================
+# STEP 7: UPLOAD TO YOUTUBE
+# ============================================================
+
+def upload_to_youtube(video_path, thumbnail_path, story_data, video_number=1):
+    log("Uploading to YouTube...")
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+    except ImportError:
+        log("ERROR: pip install google-api-python-client google-auth-oauthlib")
+        return None
+    creds = Credentials(
+        token=None,
+        refresh_token=CONFIG["YOUTUBE_REFRESH_TOKEN"],
+        client_id=CONFIG["YOUTUBE_CLIENT_ID"],
+        client_secret=CONFIG["YOUTUBE_CLIENT_SECRET"],
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=["https://www.googleapis.com/auth/youtube.upload"]
+    )
+    youtube = build("youtube", "v3", credentials=creds)
+    title = story_data["title"]
+    moral = story_data.get("moral", "Be kind and brave")
+    preview = story_data.get("story", "")[:280] + "..."
+    topic = story_data.get("topic", "adventure")
+    desc = random.choice(DESCRIPTION_TEMPLATES).format(title=title, story_preview=preview, moral=moral)
+    topic_tags = [f"{topic} story for kids", f"{topic} bedtime story", f"kids story about {topic}"]
+    all_tags = MASTER_TAGS + topic_tags + story_data.get("tags", [])
+    random.shuffle(all_tags)
+    tags = list(dict.fromkeys(all_tags))[:random.randint(27,30)]
+    emojis = ["🐉","⭐","🌟","✨","🦁","🌙","🎈","🌈","🦋","🐾"]
+    yt_title = f"{title} {random.choice(emojis)} | Bedtime Story for Kids | Animated Tale"
+    if len(yt_title) > 100: yt_title = yt_title[:97] + "..."
+    log(f"Title: {yt_title}")
+    req = youtube.videos().insert(
+        part="snippet,status",
+        body={
+            "snippet": {"title": yt_title, "description": desc, "tags": tags,
+                        "categoryId": "27", "defaultLanguage": "en", "defaultAudioLanguage": "en"},
+            "status": {"privacyStatus": CONFIG["VIDEO_PRIVACY"],
+                       "madeForKids": True, "selfDeclaredMadeForKids": True}
+        },
+        media_body=MediaFileUpload(video_path, mimetype="video/mp4", chunksize=50*1024*1024, resumable=True)
+    )
+    log("Uploading video...")
+    response = None
+    while response is None:
+        status, response = req.next_chunk()
+        if status:
+            log(f"Upload: {int(status.progress()*100)}%")
+    video_id = response["id"]
+    if os.path.exists(thumbnail_path):
+        youtube.thumbnails().set(videoId=video_id,
+            media_body=MediaFileUpload(thumbnail_path, mimetype="image/jpeg")).execute()
+    url = f"https://youtube.com/watch?v={video_id}"
+    log(f"Video live: {url}")
+    return url
+
+# ============================================================
+# STEP 8: SAVE TO GOOGLE SHEETS
+# ============================================================
+
+def save_to_sheets(title, youtube_url, story_data):
+    log("Saving to Google Sheets...")
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+    except ImportError:
+        log("Skipping Sheets: pip install google-api-python-client")
+        return
+    creds = Credentials(
+        token=None,
+        refresh_token=CONFIG["YOUTUBE_REFRESH_TOKEN"],
+        client_id=CONFIG["YOUTUBE_CLIENT_ID"],
+        client_secret=CONFIG["YOUTUBE_CLIENT_SECRET"],
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    service = build("sheets", "v4", credentials=creds)
+    row = [[datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%H:%M"),
+            title, youtube_url, story_data.get("topic",""), story_data.get("moral",""), "Published"]]
+    service.spreadsheets().values().append(
+        spreadsheetId=CONFIG["GOOGLE_SHEETS_ID"],
+        range="Sheet1!A:G", valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS", body={"values": row}
+    ).execute()
+    log("Saved to Sheets")
+
+# ============================================================
+# MAIN PIPELINE
+# ============================================================
+
+def run_pipeline():
+    video_number = get_video_number()
+    start = datetime.now()
+    log("="*55)
+    log(f"PIPELINE START — Video #{video_number}")
+    log(f"Target: USA | UK | Canada | Australia")
+    log("="*55)
+    workspace = Path("workspace")
+    workspace.mkdir(exist_ok=True)
+    orig = os.getcwd()
+    os.chdir(workspace)
+    try:
+        log("STEP 1/8: Generate story...")
+        story = generate_kids_story()
+        title = story["title"]
+        if not run_all_checks(title):
+            log("BLOCKED by anti-ban. Stopping.")
+            return
+        log("STEP 2/8: Generate images...")
+        scenes = generate_all_scenes(story["scenes"], "scenes")
+        if len(scenes) < 3:
+            raise Exception(f"Only {len(scenes)} images — need 3+")
+        log("STEP 3/8: Narration...")
+        narration = narrate_story(story["story"], "narration.mp3")
+        log("STEP 4/8: Background music...")
+        music = download_background_music("music.mp3")
+        log("STEP 5/8: Compile video...")
+        video = create_video(scenes, narration, music, "final_video.mp4")
+        log("STEP 6/8: Thumbnail...")
+        thumb = create_thumbnail(title, scenes[0], "thumbnail.jpg")
+        log("STEP 7/8: Upload to YouTube...")
+        yt_url = upload_to_youtube(video, thumb, story, video_number)
+        if not yt_url:
+            raise Exception("Upload failed — check CONFIG keys")
+        log("STEP 8/8: Save to Sheets...")
+        save_to_sheets(title, yt_url, story)
+        record_upload(title, yt_url, story.get("topic",""))
+        increment_video_number()
+        elapsed = (datetime.now() - start).seconds
+        log("="*55)
+        log(f"DONE in {elapsed}s — Video #{video_number}")
+        log(f"LIVE: {yt_url}")
+        log("="*55)
+    except Exception as e:
+        log(f"ERROR: {e}", "ERROR")
+        log(traceback.format_exc(), "ERROR")
+    finally:
+        os.chdir(orig)
+        shutil.rmtree(workspace, ignore_errors=True)
+        log("Workspace cleaned")
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    print("""
+╔═══════════════════════════════════════════╗
+║     YouTube Kids Auto-Pilot v1.0         ║
+║  Goal: 2,000 subs + 1M views/month       ║
+╚═══════════════════════════════════════════╝
+
+USAGE:
+  python youtube_autopilot.py          → run once now
+  python youtube_autopilot.py schedule → run daily at 6PM
+  python youtube_autopilot.py test     → test story generation
+""")
+
+    if len(sys.argv) < 2:
+        run_pipeline()
+
+    elif sys.argv[1] == "schedule":
+        day = datetime.now().strftime("%A").lower()
+        upload_time = UPLOAD_SCHEDULE.get(day, "18:00")
+        schedule.every().day.at(upload_time).do(run_pipeline)
+        log(f"Scheduled daily at {upload_time} EST")
+        log("Running once now, then waiting for schedule...")
+        run_pipeline()
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
+
+    elif sys.argv[1] == "test":
+        log("Testing story generation...")
+        story = generate_kids_story("friendly puppy")
+        log(f"SUCCESS: '{story['title']}'")
+        log(f"Moral: {story['moral']}")
+        log("All good! Fill in CONFIG keys and run: python youtube_autopilot.py")

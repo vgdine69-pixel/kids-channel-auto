@@ -1,0 +1,128 @@
+# ============================================================
+# GitHub Actions - FREE Cloud Automation
+# Runs 4 times per day on GitHub's FREE servers
+# 6:00 AM IST = 00:30 UTC
+# 11:00 AM IST = 05:30 UTC
+# 4:00 PM IST = 10:30 UTC
+# 8:00 PM IST = 14:30 UTC
+# ============================================================
+
+name: 🎬 Kids Channel Upload
+
+on:
+  schedule:
+    - cron: "30 0 * * *"    # 6:00 AM IST
+    - cron: "30 5 * * *"    # 11:00 AM IST
+    - cron: "30 10 * * *"   # 4:00 PM IST
+    - cron: "30 14 * * *"   # 8:00 PM IST
+
+  # Also allow manual trigger from GitHub website
+  workflow_dispatch:
+    inputs:
+      video_type:
+        description: 'Video Type'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - fairy_tale_story
+          - brain_boost
+          - motivational
+          - learning
+          - good_habits
+          - adventure_story
+
+jobs:
+  create_and_upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # 2 hour max per run
+
+    steps:
+      # ── Step 1: Get the code ──────────────────────────────────────
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Step 2: Set up Python ──────────────────────────────────────
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # ── Step 3: Install packages ───────────────────────────────────
+      - name: 📦 Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation -qq
+          pip install --quiet \
+            google-generativeai \
+            google-api-python-client \
+            google-auth-httplib2 \
+            google-auth-oauthlib \
+            moviepy==1.0.3 \
+            Pillow \
+            gTTS \
+            pydub \
+            numpy \
+            PyYAML \
+            requests
+
+      # ── Step 4: Restore YouTube auth token ────────────────────────
+      - name: 🔑 Restore YouTube credentials
+        run: |
+          echo "${{ secrets.YOUTUBE_TOKEN_B64 }}" | base64 -d > token.pickle
+        continue-on-error: true
+
+      # ── Step 5: Restore topics queue ──────────────────────────────
+      - name: 📋 Restore topics queue
+        run: |
+          mkdir -p data
+            printf '%s' '${{ secrets.TOPICS_JSON }}' | python3 -m json.tool > data/topics.json || echo '{"pending": [], "completed": []}' > data/topics.json        continue-on-error: true
+
+      # ── Step 6: Run the automation ────────────────────────────────
+      - name: 🎬 Generate & Upload Video
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          CHANNEL_NAME: ${{ secrets.CHANNEL_NAME }}
+          VIDEO_TYPE: ${{ github.event.inputs.video_type || 'auto' }}
+        run: python scripts/run_pipeline.py
+
+      # ── Step 7: Save updated topics back to GitHub Secrets ────────
+      - name: 💾 Save topics queue
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -f data/topics.json ]; then
+            TOPICS_B64=$(cat data/topics.json | base64 -w 0)
+            python scripts/update_secret.py TOPICS_JSON "$TOPICS_B64"
+          fi
+        continue-on-error: true
+
+      # ── Step 8: Save updated YouTube token ────────────────────────
+      - name: 💾 Save YouTube token
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -f token.pickle ]; then
+            TOKEN_B64=$(cat token.pickle | base64 -w 0)
+            python scripts/update_secret.py YOUTUBE_TOKEN_B64 "$TOKEN_B64"
+          fi
+        continue-on-error: true
+
+      # ── Step 9: Upload logs ────────────────────────────────────────
+      - name: 📋 Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-log-${{ github.run_number }}
+          path: |
+            logs/
+            thumbnails_out/
+          retention-days: 7
