@@ -53,7 +53,7 @@ import google.generativeai as genai
 def setup_gemini():
     """Configure free Gemini API."""
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-pro")
+    model = genai.GenerativeModel("gemini-1.5-flash")
     return model
 
 def ai_call(model, prompt: str, max_retries: int = 3) -> str:
