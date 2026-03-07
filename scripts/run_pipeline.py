@@ -47,23 +47,20 @@ VIDEO_TYPE_INPUT = os.environ.get("VIDEO_TYPE", "auto")
 # MODULE 1: FREE AI CONTENT GENERATOR (Google Gemini)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+# from google.genai import types - not needed for google-generativeai
 
 def setup_gemini():
     """Configure free Gemini API."""
-    # Create client - automatically uses GEMINI_API_KEY environment variable
-    client = genai.Client()
-    return client
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-pro")
+    return model
 
-def ai_call(client, prompt: str, max_retries: int = 3) -> str:
+def ai_call(model, prompt: str, max_retries: int = 3) -> str:
     """Call Gemini with retry logic."""
     for attempt in range(max_retries):
         try:
-            response = client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=prompt
-            )
+            response = model.generate_content(prompt)
             return response.text.strip()
         except Exception as e:
             logger.warning(f"Gemini attempt {attempt+1} failed: {e}")
