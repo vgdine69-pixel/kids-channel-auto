@@ -68,7 +68,7 @@ def ai_call(client, prompt: str, max_retries: int = 3) -> str:
         except Exception as e:
             logger.warning(f"Gemini attempt {attempt+1} failed: {e}")
             time.sleep(5 * (attempt + 1))
-    return ""    return ""
+        return ""
 
 def parse_json_response(text: str) -> dict:
     """Safely parse JSON from AI response."""
