@@ -293,7 +293,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 from gtts import gTTS
 import moviepy.editor as mp
 
-W, H = 1920, 1080
+W, H = 1280, 720
 
 SKY_COLORS = {
     "day":       {"top": (100, 180, 255), "bot": (200, 235, 255), "gnd": (60, 140, 50)},
@@ -649,7 +649,7 @@ def create_video(script: dict, video_type: str) -> str:
         try:
             clip = mp.ImageSequenceClip(frames, fps=fps)
             audio_clip = mp.AudioFileClip(audio_path)
-            clip = clip.set_audio(audio_clip).set_duration(max(duration, audio_clip.duration + 0.4))
+            clip = clip.set_audio(audio_clip).set_duration(audio_clip.duration)
             clips.append(clip)
             logger.info(f"  ✅ Scene {i+1}/{len(scenes)} done ({duration:.1f}s)")
         except Exception as e:
@@ -732,7 +732,7 @@ def _create_intro_clip(script, characters, fps, temp_files):
         d = generate_tts(hook, af)
         try:
             audio = mp.AudioFileClip(af)
-            clip = clip.set_audio(audio).set_duration(max(dur, audio.duration+0.4))
+            clip = clip.set_audio(audio).set_duration(audio.duration)
         except Exception:
             pass
     return clip
@@ -773,7 +773,7 @@ def _create_outro_clip(script, fps, temp_files):
     generate_tts(narration, af)
     try:
         audio = mp.AudioFileClip(af)
-        clip = clip.set_audio(audio).set_duration(max(dur, audio.duration+0.4))
+        clip = clip.set_audio(audio).set_duration(audio.duration)
     except Exception:
         pass
     return clip
