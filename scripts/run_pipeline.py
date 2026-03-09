@@ -47,7 +47,7 @@ VIDEO_TYPE_INPUT = os.environ.get("VIDEO_TYPE", "auto")
 # MODULE 1: FREE AI CONTENT GENERATOR (Google Gemini)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-import google.generativeai as genai
+from google import genai
 def setup_gemini():
     """Configure free Gemini API."""
     client = genai.Client(api_key=GEMINI_API_KEY)
