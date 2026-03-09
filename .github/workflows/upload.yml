@@ -56,7 +56,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation -qq
           pip install --quiet \
-            google-generativeai \
+            google-genai \
             google-api-python-client \
             google-auth-httplib2 \
             google-auth-oauthlib \
