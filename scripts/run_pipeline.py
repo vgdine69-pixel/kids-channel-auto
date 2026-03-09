@@ -50,14 +50,13 @@ VIDEO_TYPE_INPUT = os.environ.get("VIDEO_TYPE", "auto")
 from google import genai
 def setup_gemini():
     """Configure free Gemini API."""
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1"})
-    return client
+    client = genai.Client(api_key=GEMINI_API_KEY)    return client
 
 def ai_call(client, prompt: str, max_retries: int = 3) -> str:
     """Call Gemini with retry logic."""
     for attempt in range(max_retries):
         try:
-                        response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
+                        response = client.models.generate_content(model="gemini-2.0-flash-lite", contents=prompt)
                         return response.text.strip()
         except Exception as e:
             logger.warning(f"Gemini attempt {attempt+1} failed: {e}")
