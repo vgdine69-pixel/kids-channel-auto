@@ -59,7 +59,7 @@ def ai_call(client, prompt: str, max_retries: int = 3) -> str:
     for attempt in range(max_retries):
         try:
                         response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-            return response.text.strip()
+                        return response.text.strip()
         except Exception as e:
             logger.warning(f"Gemini attempt {attempt+1} failed: {e}")
             time.sleep(5 * (attempt + 1))
