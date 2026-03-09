@@ -57,12 +57,18 @@ def ai_call(client, prompt: str, max_retries: int = 3) -> str:
     for attempt in range(max_retries):
         try:
                         response = client.models.generate_content(model="gemini-2.0-flash-lite", contents=prompt)
+                      time.sleep(2)  # Small delay before every API call
                         return response.text.strip()
         except Exception as e:
+                  err = str(e)
+                  if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                                    logger.warning(f"Quota hit - waiting 60s...")
+                                    time.sleep(60)
+                  else:
             logger.warning(f"Gemini attempt {attempt+1} failed: {e}")
             time.sleep(5 * (attempt + 1))
-    return ""
-
+                        return ""  # Return empty after all retries exhausted
+    
 def parse_json_response(text: str) -> dict:
     """Safely parse JSON from AI response."""
     import re
