@@ -18,6 +18,15 @@ on:
           - learning
           - good_habits
           - adventure_story
+
+env:
+  GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+  YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+  YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+  CHANNEL_NAME: ${{ secrets.CHANNEL_NAME }}
+  GH_TOKEN: ${{ secrets.GH_PAT }}
+  REPO: ${{ github.repository }}
+
 jobs:
   create_and_upload:
     runs-on: ubuntu-latest
@@ -25,49 +34,64 @@ jobs:
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
+
       - name: 🐍 Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
+
       - name: 📦 Install dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation -qq
           pip install --quiet google-api-python-client google-auth-httplib2 google-auth-oauthlib moviepy==1.0.3 Pillow gTTS pydub numpy PyYAML requests pynacl
+
       - name: 🔑 Restore YouTube credentials
         run: |
+          if [ -z "${{ secrets.YOUTUBE_TOKEN_B64 }}" ]; then
+            echo "❌ YOUTUBE_TOKEN_B64 secret is not set!"
+            echo "Run auth_setup.py locally and add the token to GitHub Secrets."
+            exit 1
+          fi
           echo "${{ secrets.YOUTUBE_TOKEN_B64 }}" | base64 -d > token.pickle
-        continue-on-error: true
+          echo "✅ YouTube credentials restored"
+
       - name: 📋 Restore topics queue
         run: |
           mkdir -p data
-          printf '%s' '${{ secrets.TOPICS_JSON }}' | python3 -m json.tool > data/topics.json || echo '{"pending": [], "completed": []}' > data/topics.json
-        continue-on-error: true
+          if [ -n "${{ secrets.TOPICS_JSON }}" ]; then
+            printf '%s' '${{ secrets.TOPICS_JSON }}' | python3 -m json.tool > data/topics.json 2>/dev/null || echo '{"pending": [], "completed": []}' > data/topics.json
+          else
+            echo '{"pending": [], "completed": []}' > data/topics.json
+          fi
+          echo "✅ Topics queue restored"
+
       - name: 🎬 Generate & Upload Video
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
-          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
-          CHANNEL_NAME: ${{ secrets.CHANNEL_NAME }}
           VIDEO_TYPE: ${{ github.event.inputs.video_type || 'auto' }}
-        run: python scripts/run_pipeline.py
+        run: |
+          echo "🎬 Starting video generation..."
+          python scripts/run_pipeline.py
+
       - name: 💾 Save topics queue
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          REPO: ${{ github.repository }}
         run: |
-          if [ -f data/topics.json ]; then TOPICS_B64=$(cat data/topics.json | base64 -w 0); python scripts/update_secret.py TOPICS_JSON "$TOPICS_B64"; fi
+          if [ -f data/topics.json ]; then
+            TOPICS_B64=$(cat data/topics.json | base64 -w 0)
+            python scripts/update_secret.py TOPICS_JSON "$TOPICS_B64"
+          fi
         continue-on-error: true
+
       - name: 💾 Save YouTube token
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          REPO: ${{ github.repository }}
         run: |
-          if [ -f token.pickle ]; then TOKEN_B64=$(cat token.pickle | base64 -w 0); python scripts/update_secret.py YOUTUBE_TOKEN_B64 "$TOKEN_B64"; fi
+          if [ -f token.pickle ]; then
+            TOKEN_B64=$(cat token.pickle | base64 -w 0)
+            python scripts/update_secret.py YOUTUBE_TOKEN_B64 "$TOKEN_B64"
+          fi
         continue-on-error: true
+
       - name: 📋 Upload logs
         if: always()
         uses: actions/upload-artifact@v4
