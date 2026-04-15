@@ -184,46 +184,163 @@ def get_youtube_client():
     try:
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
-        if not os.path.exists("token.pickle"): return None
-        with open("token.pickle", "rb") as f:
-            creds = pickle.load(f)
-        return build("youtube", "v3", credentials=creds)
-    except: return None
+        from google.auth.transport.requests import Request
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        import google.auth.exceptions
+        
+        creds = None
+        client_id = os.environ.get("YOUTUBE_CLIENT_ID", "")
+        client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET", "")
+        
+        # Load existing token
+        if os.path.exists("token.pickle"):
+            try:
+                with open("token.pickle", "rb") as f:
+                    creds = pickle.load(f)
+                logger.info("✅ Loaded existing YouTube credentials")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to load token.pickle: {e}")
+        
+        # If no credentials or they're invalid, try to refresh or create new ones
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try:
+                    logger.info("🔄 Refreshing expired YouTube token...")
+                    creds.refresh(Request())
+                    logger.info("✅ Token refreshed successfully")
+                except Exception as e:
+                    logger.error(f"❌ Token refresh failed: {e}")
+                    creds = None
+            
+            # If still no valid credentials, we can't proceed
+            if not creds or not creds.valid:
+                if client_id and client_secret:
+                    logger.error("❌ Token expired and can't be refreshed. Need new OAuth flow.")
+                    logger.error("Run auth_setup.py locally to generate a fresh token.")
+                else:
+                    logger.error("❌ No YOUTUBE_CLIENT_ID or YOUTUBE_CLIENT_SECRET set")
+                return None
+        
+        # Build YouTube client with cache disabled to avoid file_cache warning
+        youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
+        logger.info("✅ YouTube client created successfully")
+        return youtube
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to create YouTube client: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
 
 def upload_to_youtube(youtube, video_path, title, description, tags, thumb_path, category_id="27"):
     try:
         from googleapiclient.http import MediaFileUpload
-        request = youtube.videos().insert(
-            part="snippet,status",
-            body={"snippet": {"title": title, "description": description, "tags": tags[:20], "categoryId": category_id}, "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": True}},
-            media_body=MediaFileUpload(video_path, chunksize=-1, resumable=True)
-        )
+        from googleapiclient.errors import HttpError
+        
+        logger.info(f"📤 Uploading video to YouTube: {title}")
+        
+        body = {
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": tags[:20],
+                "categoryId": category_id
+            },
+            "status": {
+                "privacyStatus": "public",
+                "selfDeclaredMadeForKids": True
+            }
+        }
+        
+        media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+        
         response = None
-        while response is None:
-            status, response = request.next_chunk()
-        return {"success": True, "video_id": response.get("id")}
-    except: return {"success": False}
+        retries = 0
+        while response is None and retries < 5:
+            try:
+                status, response = request.next_chunk()
+                if status:
+                    logger.info(f"⬆️ Upload progress: {int(status.progress() * 100)}%")
+            except HttpError as e:
+                if e.resp.status in [500, 502, 503, 504]:
+                    retries += 1
+                    logger.warning(f"⚠️ Upload error (retry {retries}/5): {e}")
+                    time.sleep(2 ** retries)
+                else:
+                    raise
+        
+        if response:
+            video_id = response.get("id")
+            logger.info(f"✅ Upload complete! Video ID: {video_id}")
+            return {"success": True, "video_id": video_id}
+        else:
+            logger.error("❌ Upload failed after retries")
+            return {"success": False}
+            
+    except HttpError as e:
+        logger.error(f"❌ YouTube HTTP error: {e.resp.status} - {e.reason}")
+        try:
+            error_details = e.error_details if hasattr(e, 'error_details') else e._get_reason()
+            logger.error(f"Details: {error_details}")
+        except:
+            pass
+        return {"success": False}
+    except Exception as e:
+        logger.error(f"❌ Upload failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"success": False}
 
 def main():
     logger.info("🎬 KIDS CHANNEL AUTOMATION")
+    logger.info(f"⏰ Started at: {datetime.now().isoformat()}")
+    
     if not GROQ_API_KEY:
-        logger.error("❌ GROQ_API_KEY not set!"); sys.exit(1)
+        logger.error("❌ GROQ_API_KEY not set!")
+        sys.exit(1)
+    
+    # Check YouTube credentials
+    if not os.environ.get("YOUTUBE_CLIENT_ID") or not os.environ.get("YOUTUBE_CLIENT_SECRET"):
+        logger.warning("⚠️ YOUTUBE_CLIENT_ID or YOUTUBE_CLIENT_SECRET not set")
+    
+    if not os.path.exists("token.pickle"):
+        logger.error("❌ token.pickle not found! Run auth_setup.py first to authenticate.")
+        sys.exit(1)
+    
     api_key = setup_groq()
     topics = load_topics()
     video_type = pick_video_type()
+    logger.info(f"🎲 Selected video type: {video_type}")
+    
     topic = get_next_topic(api_key, video_type, topics)
+    logger.info(f"📋 Topic: {topic}")
+    
     script = generate_script(api_key, topic, video_type)
     metadata = generate_seo_metadata(api_key, script, video_type)
+    
     video_path = create_video(script, video_type)
-    if not video_path: sys.exit(1)
+    if not video_path:
+        logger.error("❌ Video creation failed")
+        sys.exit(1)
+    logger.info(f"✅ Video created: {video_path}")
+    
     yt = get_youtube_client()
-    if not yt: sys.exit(1)
+    if not yt:
+        logger.error("❌ Failed to create YouTube client. Cannot upload.")
+        logger.error("💡 To fix this:")
+        logger.error("   1. Run 'python auth_setup.py' locally to generate a new token.pickle")
+        logger.error("   2. Upload the new token.pickle to GitHub Secrets as YOUTUBE_TOKEN_B64")
+        sys.exit(1)
+    
     result = upload_to_youtube(yt, video_path, metadata["title"], metadata["description"], metadata["tags"], "", metadata["category_id"])
+    
     if result.get("success"):
         mark_topic_done(topic, topics)
-        logger.info("🎉 DONE!")
+        logger.info(f"🎉 DONE! Video uploaded: https://youtube.com/watch?v={result.get('video_id')}")
     else:
-        logger.error("Upload failed")
+        logger.error("❌ Upload failed")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
